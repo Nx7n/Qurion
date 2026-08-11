@@ -1,0 +1,29 @@
+logger:
+  level: debug
+
+global:
+  max:
+    ue: 1024
+
+upf:
+  pfcp:
+    server:
+      - address: 172.18.0.2
+
+    client:
+      smf:
+        - address: 172.18.0.7
+  gtpu:
+    server:
+      - address: 172.18.0.2
+        advertise: 172.18.0.2
+
+  session:
+    - subnet: 10.45.0.0/16
+      gateway: 10.45.0.1
+      dev: ogstun
+
+  metrics:
+    server:
+      - address: 172.18.0.2
+        port: 9090

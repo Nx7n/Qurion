@@ -1,0 +1,20 @@
+logger:
+  level: debug
+
+global:
+  max:
+    ue: 1024
+
+sgwu:
+  pfcp:
+    server:
+      - address: 172.18.0.10
+    
+    client:
+      sgwc:
+        -address: 172.18.0.9
+
+  gtpu:
+    server:
+      - address: 172.18.0.10
+        advertise: 172.18.0.10

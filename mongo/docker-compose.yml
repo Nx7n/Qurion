@@ -1,0 +1,21 @@
+services:
+  mongodb:
+    image: mongo:7
+
+    container_name: mongodb
+
+    restart: unless-stopped
+
+    ports:
+      - "27017:27017"
+
+    volumes:
+      - ./mongo/data:/data/db
+
+    networks:
+      diameter-net:
+        ipv4_address: 172.30.0.2
+
+networks:
+  diameter-net:
+    driver: bridge

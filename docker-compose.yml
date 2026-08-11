@@ -1,0 +1,280 @@
+services:
+
+  mongodb:
+    image: mongo:7
+    container_name: mongodb
+    restart: unless-stopped
+    ports:
+      - "27017:27017"
+
+    volumes:
+      - ./mongo/data:/data/db
+    
+
+    networks:
+      default:
+        ipv4_address: ${MONGO_IP}
+
+  hss:
+    build:
+      context: .
+      dockerfile: docker/open5gs/Dockerfile
+
+    container_name: hss
+
+    depends_on:
+      - mongodb
+
+    volumes:
+      - ./src/open5gs:/work/open5gs
+      - ./configs/hss/hss.yaml:/usr/local/etc/open5gs/hss.yaml
+      - ./configs/freeDiameter/hss.conf:/usr/local/etc/freeDiameter/hss.conf
+
+    command: /work/open5gs/build/src/hss/open5gs-hssd
+
+    networks:
+      default:
+        ipv4_address: ${HSS_IP}
+
+  mme:
+    build:
+      context: .
+      dockerfile: docker/open5gs/Dockerfile
+
+    container_name: mme
+
+    depends_on:
+      - mongodb
+      - hss
+
+    volumes:
+      - ./src/open5gs:/work/open5gs
+      - ./configs/mme/mme.yaml:/usr/local/etc/open5gs/mme.yaml
+      - ./configs/freeDiameter/mme.conf:/usr/local/etc/freeDiameter/mme.conf
+
+    command: /work/open5gs/build/src/mme/open5gs-mmed
+
+    networks:
+      default:
+        ipv4_address: ${MME_IP}
+  
+  sgwc:
+    build: 
+      context: .
+      dockerfile: docker/open5gs/Dockerfile
+
+    container_name: sgwc
+
+    depends_on:
+      - mme
+    
+    volumes:
+      - ./src/open5gs:/work/open5gs
+      - ./configs/open5gs/sgwc.yaml:/usr/local/etc/open5gs/sgwc.yaml
+    
+    command: /work/open5gs/build/src/sgwc/open5gs-sgwcd -c /usr/local/etc/open5gs/sgwc.yaml
+
+    networks:
+      default:
+        ipv4_address: ${SGWC_IP}
+
+  sgwu:
+    build: 
+      context: .
+      dockerfile: docker/open5gs/Dockerfile
+      
+    container_name: sgwu
+
+    depends_on:
+      - sgwc
+
+    volumes:
+      - ./src/open5gs:/work/open5gs
+      - ./configs/open5gs/sgwu.yaml:/usr/local/etc/open5gs/sgwu.yaml
+
+    command: /work/open5gs/build/src/sgwu/open5gs-sgwud -c /usr/local/etc/open5gs/sgwu.yaml
+
+    networks:
+      default:
+        ipv4_address: ${SGWU_IP}
+
+  pcrf:
+    build:
+      context: .
+      dockerfile: docker/open5gs/Dockerfile
+
+    container_name: pcrf
+
+    depends_on:
+      - mongodb
+
+    volumes:
+      - ./src/open5gs:/work/open5gs
+      - ./configs/pcrf/pcrf.yaml:/usr/local/etc/open5gs/pcrf.yaml
+      - ./configs/freeDiameter/pcrf.conf:/usr/local/etc/freeDiameter/pcrf.conf
+
+    command: /work/open5gs/build/src/pcrf/open5gs-pcrfd
+
+    networks:
+      default:
+        ipv4_address: ${PCRF_IP}
+
+  smf:
+    build: 
+      context: .
+      dockerfile: docker/open5gs/Dockerfile
+
+    container_name: smf
+
+    depends_on:
+      - mongodb
+      - nrf
+      - pcrf
+
+    volumes:
+      - ./src/open5gs:/work/open5gs
+      - ./configs/smf/smf.yaml:/usr/local/etc/open5gs/smf.yaml
+      - ./configs/freeDiameter/smf.conf:/usr/local/etc/freeDiameter/smf.conf
+
+    command: /work/open5gs/build/src/smf/open5gs-smfd -c /usr/local/etc/open5gs/smf.yaml
+
+    networks:
+      default:
+        ipv4_address: ${SMF_IP}
+
+  upf:
+    build: 
+      context: .
+      dockerfile: docker/open5gs/Dockerfile
+
+    container_name: upf
+   
+    volumes: 
+      - ./src/open5gs:/work/open5gs
+      - ./configs/open5gs/upf.yaml:/usr/local/etc/open5gs/upf.yaml
+      - ./docker/upf/entrypoint.sh:/entrypoint.sh:ro
+
+    entrypoint: ["/entrypoint.sh"]
+
+    devices:
+      - /dev/net/tun:/dev/net/tun
+
+    cap_add:
+      - NET_ADMIN
+
+    networks: 
+      default:
+        ipv4_address: ${UPF_IP}
+
+
+  srsenb:
+    image: srsran_dia
+    container_name: srsenb
+
+    depends_on:
+      - mme
+
+    volumes:
+      - ./configs/srsran/enb:/etc/srsran
+      - ./captures:/captures
+    
+    working_dir: /etc/srsran
+
+    command:
+      - srsenb 
+      - /etc/srsran/enb.conf
+    
+    cap_add:
+      - SYS_NICE
+      - IPC_LOCK
+    
+    ulimits:
+      rtprio: 99
+      memlock: -1
+    
+    networks:
+      default:
+        ipv4_address: ${SRS_ENB_IP}
+
+  srsue:
+    image: srsue_dia
+    container_name: srsue
+
+    depends_on:
+      - srsenb
+    
+    volumes:
+      - ./configs/srsran/ue:/etc/srsran
+
+    command:
+      - srsue
+      - /etc/srsran/ue.conf
+    
+    devices:
+      - /dev/net/tun:/dev/net/tun
+
+    cap_add:
+      - NET_ADMIN
+      - SYS_NICE
+      - IPC_LOCK
+    
+    ulimits:
+      rtprio: 99
+      memlock: -1
+
+    networks:
+      default:
+        ipv4_address: ${SRS_UE_IP}
+  
+
+  nrf:
+    build:
+      context: .
+      dockerfile: docker/open5gs/Dockerfile
+
+    container_name: nrf
+
+    depends_on:
+      - mongodb
+
+    volumes:
+      - ./src/open5gs:/work/open5gs
+      - ./configs/nrf/nrf.yaml:/usr/local/etc/open5gs/nrf.yaml
+
+    command: /work/open5gs/build/src/nrf/open5gs-nrfd
+
+    networks:
+      default:
+        ipv4_address: ${NRF_IP}
+
+  webui:  
+    build:
+      context: .
+      dockerfile: docker/open5gs-webui/Dockerfile
+
+    container_name: webui
+
+    depends_on:
+      - mongodb
+
+    environment:
+      DB_URI: mongodb://mongodb/open5gs
+      HOSTNAME: 0.0.0.0
+      PORT: 3000
+      NODE_ENV: production
+
+    ports:
+      - "3000:3000"
+
+    restart: unless-stopped
+
+    networks:
+      default:
+        ipv4_address: ${WEBUI_IP}
+
+networks:
+  default:
+    name: pqc_dia_net
+    ipam:
+      config:
+        - subnet: ${TEST_NETWORK}

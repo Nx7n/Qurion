@@ -1,0 +1,170 @@
+ 
+ 
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+*~
+.vscode/
+.idea/
+
+ 
+# Environment / Secrets
+.env
+.env.*
+!.env.example
+
+*.key
+*.pem
+*.crt
+*.p12
+*.pfx
+
+
+!certs/example/
+!certs/example/*.crt
+
+ 
+# Docker
+docker-compose.override.yml
+docker-compose.local.yml
+
+# Docker generated/runtime files
+docker-data/
+docker-volumes/
+
+ 
+# Open5GS build artifacts
+build/
+*/build/
+src/open5gs/build/
+src/open5gs/install/
+
+src/srsran/build/
+src/srsran/install/
+
+# CMake
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+install_manifest.txt
+compile_commands.json
+
+# Make
+*.o
+*.a
+*.so
+*.so.*
+*.la
+*.lo
+
+ 
+# Logs
+*.log
+logs/
+log/
+*.pcap
+*.pcapng
+
+# Open5GS runtime logs
+open5gs-*.log
+
+# srsRAN logs
+srs*.log
+
+ 
+# Captures / Debugging
+captures/
+pcaps/
+*.cap
+*.pcap
+*.pcapng
+
+
+ 
+# Runtime / PID / socket files
+*.pid
+*.sock
+*.socket
+
+ 
+# Database / MongoDB
+mongodb/
+mongo-data/
+data/db/
+mongo/**/data/
+
+*.db
+*.sqlite
+*.sqlite3
+
+ 
+# Temporary files
+tmp/
+temp/
+*.tmp
+*.bak
+*.backup
+
+ 
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+
+.venv/
+venv/
+env/
+
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+ 
+# Python packaging
+*.egg-info/
+dist/
+*.egg
+.eggs/
+
+ 
+# Node / JavaScript (if used for dashboard/tools)
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+pnpm-debug.log*
+
+ 
+# PQC / Crypto generated material
+ keys/
+private/
+secrets/
+*.secret
+*.priv
+*.sk
+*.seed
+
+ 
+# FreeDiameter generated/runtime files
+*.pid
+*.sock
+
+certdb/
+certs/private/
+certs/*.key
+
+.coverage
+.coverage.*
+htmlcov/
+.pytest_cache/
+coverage.xml
+
+
+*.code-workspace
+
+*.orig
+*.rej
+*.patch
+
+core
+core.*
