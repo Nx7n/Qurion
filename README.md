@@ -203,9 +203,6 @@ To force a clean rebuild without using Docker's build cache:
 ```bash
 docker compose build --no-cache
 ```
-
-This builds all services in `docker-compose.yml` that contain a `build:` directive.
-
 ---
 
 ### 5. Build the srsRAN Images
