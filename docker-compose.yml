@@ -28,7 +28,8 @@ services:
     volumes:
       - ./src/open5gs:/work/open5gs
       - ./configs/hss/hss.yaml:/usr/local/etc/open5gs/hss.yaml
-      - ./configs/freeDiameter/hss.conf:/usr/local/etc/freeDiameter/hss.conf
+      - ./configs/freeDiameter/hss.conf:/usr/local/etc/freeDiameter/hss.conf:ro
+      - ./configs/freeDiameter/acl.conf:/usr/local/etc/freeDiameter/acl.conf:ro
 
     command: /work/open5gs/build/src/hss/open5gs-hssd
 
@@ -46,6 +47,7 @@ services:
     depends_on:
       - mongodb
       - hss
+      - qurion-mme
 
     volumes:
       - ./src/open5gs:/work/open5gs
@@ -271,6 +273,45 @@ services:
     networks:
       default:
         ipv4_address: ${WEBUI_IP}
+
+  qurion-hss:
+    image: qurion-proxy:local
+    build:
+      context: .
+      dockerfile: docker/qurion/Dockerfile
+    container_name: qurion-hss
+    restart: unless-stopped
+    working_dir: /app
+    
+    command: ["python3", "-m", "src.gateway.qurion_proxy", "--mode", "hss"]
+    volumes:
+      - ./src:/app/src:ro
+      - ./configs/qurion/proxy.yaml:/app/configs/qurion/proxy.yaml:ro
+      - ./configs/qurion/hss_keys.json:/app/configs/qurion/hss_keys.json:ro
+      - ./configs/qurion/mme_keys.json:/app/configs/qurion/mme_keys.json:ro
+    depends_on:
+      - hss
+    networks:
+      default:
+        ipv4_address: ${QURION_HSS_IP}
+
+  qurion-mme:
+    build:
+      context: .
+      dockerfile: docker/qurion/Dockerfile
+    container_name: qurion-mme
+    command: ["python3", "-m", "src.gateway.qurion_proxy", "--mode", "mme"]
+    volumes:
+      - ./src:/app/src:ro
+      - ./configs/qurion/proxy.yaml:/app/configs/qurion/proxy.yaml:ro
+      - ./configs/qurion/mme_keys.json:/app/configs/qurion/mme_keys.json:ro
+      - ./configs/qurion/hss_keys.json:/app/configs/qurion/hss_keys.json:ro
+    depends_on:
+      - qurion-hss
+    restart: unless-stopped
+    networks:
+      default:
+        ipv4_address: ${QURION_MME_IP}
 
 networks:
   default:

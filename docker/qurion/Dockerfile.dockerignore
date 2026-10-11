@@ -1,0 +1,13 @@
+**
+!requirements.txt
+!src/
+!src/crypto/
+!src/crypto/**
+!src/diameter/
+!src/diameter/**
+!src/gateway/
+!src/gateway/**
+!src/protocol/
+!src/protocol/**
+!src/telemetry/
+!src/telemetry/**

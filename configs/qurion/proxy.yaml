@@ -1,0 +1,15 @@
+hss:
+  listen_host: "0.0.0.0"
+  listen_port: 3868
+  upstream_host: "hss"
+  upstream_port: 3869
+  operator_id: "hss.localdomain"
+  realm: "localdomain"
+
+mme:
+  listen_host: "0.0.0.0"
+  listen_port: 3868
+  upstream_host: "qurion-hss"
+  upstream_port: 3868
+  operator_id: "mme.localdomain"
+  realm: "localdomain"

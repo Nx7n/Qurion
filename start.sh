@@ -14,9 +14,8 @@ done
 echo ""
 echo "MongoDB ready"
 
-
 echo "Starting core network..."
-docker compose up -d nrf hss upf sgwu sgwc smf pcrf mme
+docker compose up -d nrf hss qurion-hss qurion-mme upf sgwu sgwc smf pcrf mme
 
 echo ""
 echo "Waiting for core..."
