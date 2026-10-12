@@ -289,6 +289,7 @@ services:
       - ./configs/qurion/proxy.yaml:/app/configs/qurion/proxy.yaml:ro
       - ./configs/qurion/hss_keys.json:/app/configs/qurion/hss_keys.json:ro
       - ./configs/qurion/mme_keys.json:/app/configs/qurion/mme_keys.json:ro
+      - ./configs/certificates:/app/configs/certificates:ro
     depends_on:
       - hss
     networks:
@@ -306,6 +307,7 @@ services:
       - ./configs/qurion/proxy.yaml:/app/configs/qurion/proxy.yaml:ro
       - ./configs/qurion/mme_keys.json:/app/configs/qurion/mme_keys.json:ro
       - ./configs/qurion/hss_keys.json:/app/configs/qurion/hss_keys.json:ro
+      - ./configs/certificates:/app/configs/certificates:ro
     depends_on:
       - qurion-hss
     restart: unless-stopped

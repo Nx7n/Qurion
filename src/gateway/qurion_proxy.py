@@ -31,7 +31,7 @@ from src.diameter.peer_cache import PeerCapabilityCache, PeerCacheEntry
 
 # Defensive limits for incoming Diameter messages.
 MAX_DIAMETER_MESSAGE_SIZE = 1024 * 1024  # 1 MiB
-MESSAGE_READ_TIMEOUT = 10.0               # seconds per complete message
+MESSAGE_READ_TIMEOUT = 120.0               # seconds per complete message
 
 logger = logging.getLogger("qurion_proxy")
 
