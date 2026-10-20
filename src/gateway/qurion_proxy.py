@@ -11,6 +11,7 @@ import time
 import uuid
 from dataclasses import dataclass
 from typing import Optional
+from src.certificates.trust_store import TrustStore
 
 from src.diameter.avp_codec import (
     DiameterMessage, DiameterAVP, AVPBuilder,
@@ -57,7 +58,10 @@ def negotiated_suite_name(local: QurionCapability | None, peer: QurionCapability
 
 class QurionProxy:
     CER_CEA_COMMAND = 257
-    REQUIRED_FLAGS = CapabilityFlags.PROTECTED_AV | CapabilityFlags.KEY_EXCHANGE | CapabilityFlags.OPERATOR_AUTH
+    REQUIRED_FLAGS = (
+    CapabilityFlags.PROTECTED_AV
+    | CapabilityFlags.OPERATOR_AUTH
+    )
 
     def __init__(self, config: QurionProxyConfig, agent, event_logger: EventLogger,
                  local_capability: QurionCapability | None = None,
@@ -466,9 +470,37 @@ def main():
     cert_dir = os.path.join(project_root, "configs", "certificates")
     local_cert = load_pinned_certificate(args.mode, cert_dir, local_keys)
     peer_cert = load_pinned_certificate(peer_mode, cert_dir, peer_keys)
+
+    # Build the trust store from certificates that have already passed
+    # startup pinning and key-configuration validation.
+    trusted_issuers = {
+        local_cert.operator_id: local_cert.signing_pub,
+        peer_cert.operator_id: peer_cert.signing_pub,
+    }
+
+    trust_store = TrustStore(trusted_issuers=trusted_issuers)
+
+    for cert in (local_cert, peer_cert):
+        if not trust_store.add_trusted_certificate(cert):
+            raise ValueError(
+                f"Failed to register trusted operator certificate: "
+                f"{cert.operator_id}@{cert.realm}"
+            )
+
+    # Confirm both identities are available for their required operations.
+    if trust_store.verify_peer(
+        peer_cert.operator_id, peer_cert.realm, "SIGNING"
+    ) is None:
+        raise ValueError("Peer certificate failed signing trust validation")
+
+    if trust_store.verify_peer(
+        peer_cert.operator_id, peer_cert.realm, "KEM"
+    ) is None:
+        raise ValueError("Peer certificate failed KEM trust validation")
+
     local_capability = QurionCapability(
         supported_suites=[AlgorithmSuite.QURION_V1],
-        flags=CapabilityFlags.PROTECTED_AV | CapabilityFlags.KEY_EXCHANGE | CapabilityFlags.OPERATOR_AUTH,
+        flags=(CapabilityFlags.PROTECTED_AV | CapabilityFlags.OPERATOR_AUTH ),
         operator_id=local_keys["operator_id"], realm=local_keys["realm"],
         cert_fingerprint=hashlib.sha256(local_cert.serialize()).digest(),
     )
@@ -497,7 +529,7 @@ def main():
             local_keys["sign_pub"],
             local_keys["kem_priv"],
             local_keys["kem_pub"],
-            None, None, None,
+            trust_store, None, None,
             peer_operator_id=peer_keys["operator_id"],
             peer_realm=peer_keys["realm"],
         )
@@ -509,7 +541,7 @@ def main():
             local_keys["sign_pub"],
             local_keys["kem_priv"],
             local_keys["kem_pub"],
-            None, None, None,
+            trust_store, None, None,
             peer_operator_id=peer_keys["operator_id"],
             peer_realm=peer_keys["realm"],
             peer_signing_pub=peer_keys["sign_pub"],

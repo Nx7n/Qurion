@@ -196,3 +196,100 @@ def test_hss_protects_aia_and_mme_recovers_original_vectors():
         and avp.vendor_id == QURION_VENDOR_ID
         for avp in recovered_aia.avps
     )
+
+
+def test_mme_rejects_untrusted_hss_certificate(agents, keypairs):
+    from src.certificates.trust_store import TrustStore
+
+    hss, mme = agents
+    protected = hss.process_outgoing_aia(
+        make_aia(), keypairs["mme_kem_pub"]
+    )
+
+    # An empty trust store must not authenticate the configured HSS.
+    mme.trust_store = TrustStore()
+
+    with pytest.raises(ValueError, match="trusted, valid signing certificate"):
+        mme.process_incoming_aia(protected)
+
+
+def test_mme_rejects_hss_signing_key_mismatch(agents, keypairs):
+    from src.certificates.trust_store import TrustStore
+    from src.certificates.operator_cert import (
+        OperatorCertificate, KeyUsage
+    )
+    from datetime import datetime, timezone, timedelta
+
+    hss, mme = agents
+
+    # The trusted certificate binds the HSS identity to its actual keys.
+    cert = OperatorCertificate(
+        operator_id="hss.localdomain",
+        realm="localdomain",
+        issuer_id="hss.localdomain",
+        signing_pub=keypairs["hss_sign_pub"],
+        kem_pub=keypairs["hss_kem_pub"],
+        key_usage=KeyUsage.BOTH,
+        not_before=datetime.now(timezone.utc) - timedelta(minutes=1),
+        not_after=datetime.now(timezone.utc) + timedelta(days=1),
+    )
+    cert.signature = __import__(
+        "src.crypto.signatures", fromlist=["sign"]
+    ).sign(keypairs["hss_sign_priv"], cert.get_tbs_data())
+
+    store = TrustStore({
+        "hss.localdomain": keypairs["hss_sign_pub"]
+    })
+    assert store.add_trusted_certificate(cert)
+
+    mme.trust_store = store
+
+    # The agent's configured verification key conflicts with the certificate.
+    _, wrong_signing_priv = __import__(
+        "src.crypto.signatures", fromlist=["generate_signing_keypair"]
+    ).generate_signing_keypair()
+    wrong_signing_pub, _ = generate_signing_keypair()
+    mme.peer_signing_pub = wrong_signing_pub
+
+    protected = hss.process_outgoing_aia(
+        make_aia(), keypairs["mme_kem_pub"]
+    )
+
+    with pytest.raises(ValueError, match="does not match trusted certificate"):
+        mme.process_incoming_aia(protected)
+
+
+def test_hss_rejects_mismatched_recipient_kem_key(agents, keypairs):
+    from src.certificates.trust_store import TrustStore
+    from src.certificates.operator_cert import (
+        OperatorCertificate, KeyUsage
+    )
+    from datetime import datetime, timezone, timedelta
+
+    hss, _ = agents
+
+    cert = OperatorCertificate(
+        operator_id="mme.localdomain",
+        realm="localdomain",
+        issuer_id="mme.localdomain",
+        signing_pub=keypairs["mme_sign_pub"],
+        kem_pub=keypairs["mme_kem_pub"],
+        key_usage=KeyUsage.BOTH,
+        not_before=datetime.now(timezone.utc) - timedelta(minutes=1),
+        not_after=datetime.now(timezone.utc) + timedelta(days=1),
+    )
+    cert.signature = __import__(
+        "src.crypto.signatures", fromlist=["sign"]
+    ).sign(keypairs["mme_sign_priv"], cert.get_tbs_data())
+
+    store = TrustStore({
+        "mme.localdomain": keypairs["mme_sign_pub"]
+    })
+    assert store.add_trusted_certificate(cert)
+
+    hss.trust_store = store
+
+    other_kem_pub, _ = kem_generate_keypair()
+
+    with pytest.raises(ValueError, match="does not match trusted certificate"):
+        hss.process_outgoing_aia(make_aia(), other_kem_pub)

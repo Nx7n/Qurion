@@ -7,6 +7,7 @@ an unauthenticated message field.
 from __future__ import annotations
 
 import hashlib
+import hmac
 import os
 import struct
 import time
@@ -17,6 +18,7 @@ from typing import Any
 from src.crypto.kem import generate_keypair, encapsulate, decapsulate
 from src.crypto.signatures import sign, verify
 from src.crypto.kdf import derive_key
+from src.protocol.transcript import TranscriptBuilder
 
 
 MAX_CLOCK_SKEW_SECONDS = 300
@@ -35,6 +37,7 @@ class SessionKeys:
     key_id: str
     created_at: float
     expires_at: float
+    transcript_hash: bytes = b""
 
 
 def _lp(data: bytes) -> bytes:
@@ -77,8 +80,9 @@ def _offer_tbs(offer: dict) -> bytes:
     ))
 
 
-def _response_tbs(response: dict, offer: dict) -> bytes:
-    return b"QURION-KEY-RESPONSE-v1" + b"".join((
+def _response_core_tbs(response: dict, offer: dict) -> bytes:
+    """Canonical response fields covered by the transcript, excluding its MAC/signature."""
+    return b"QURION-KEY-RESPONSE-CORE-v1" + b"".join((
         _lp(_text(offer.get("operator_id"), "offer operator_id")),
         _lp(_text(offer.get("realm"), "offer realm")),
         _lp(_bytes(offer.get("kem_pub"), "offer KEM public key", exact_len=1184)),
@@ -90,6 +94,37 @@ def _response_tbs(response: dict, offer: dict) -> bytes:
         struct.pack(">d", _timestamp(response.get("timestamp"), "Response")),
         _lp(_bytes(offer.get("signature"), "offer signature")),
     ))
+
+
+def _response_tbs(response: dict, offer: dict) -> bytes:
+    """Signature input binds the core response plus the transcript hash and MAC."""
+    return b"QURION-KEY-RESPONSE-SIGNED-v1" + b"".join((
+        _lp(_response_core_tbs(response, offer)),
+        _lp(_bytes(response.get("transcript_hash"), "transcript hash", exact_len=32)),
+        _lp(_bytes(response.get("transcript_mac"), "transcript MAC", exact_len=32)),
+    ))
+
+
+def _transcript_hash(offer: dict, response: dict) -> bytes:
+    """Canonical hash of the offer and response core, excluding MAC/signature to avoid circularity."""
+    transcript = TranscriptBuilder()
+    transcript.add_entry("protocol", b"QURION-KEX-TRANSCRIPT-v1")
+    transcript.add_entry("offer_tbs", _offer_tbs(offer))
+    transcript.add_entry("offer_signature", _bytes(offer.get("signature"), "offer signature"))
+    transcript.add_entry("response_core_tbs", _response_core_tbs(response, offer))
+    return transcript.get_hash()
+
+
+def _transcript_mac(mac_key: bytes, transcript_hash: bytes) -> bytes:
+    if not isinstance(mac_key, bytes) or len(mac_key) != 32:
+        raise ValueError("Invalid transcript MAC key")
+    if not isinstance(transcript_hash, bytes) or len(transcript_hash) != 32:
+        raise ValueError("Invalid transcript hash")
+    return hmac.new(
+        mac_key,
+        b"QURION-KEX-TRANSCRIPT-MAC-v1" + transcript_hash,
+        hashlib.sha256,
+    ).digest()
 
 
 class KeyExchange:
@@ -190,9 +225,14 @@ class KeyExchange:
             "nonce": responder_nonce,
             "timestamp": time.time(),
         }
+        transcript_hash = _transcript_hash(offer, response)
+        salt = hashlib.sha256(
+            b"QURION-KEX-SALT-v1" + offer["nonce"] + responder_nonce + transcript_hash
+        ).digest()
+        self._derive_keys(shared_secret, salt, transcript_hash)
+        response["transcript_hash"] = transcript_hash
+        response["transcript_mac"] = _transcript_mac(self.session_keys.mac_key, transcript_hash)
         response["signature"] = sign(self.signing_key, _response_tbs(response, offer))
-        salt = hashlib.sha256(b"QURION-KEX-SALT-v1" + offer["nonce"] + responder_nonce).digest()
-        self._derive_keys(shared_secret, salt)
         self._processed_offer_nonces[nonce] = timestamp
         return response
 
@@ -211,6 +251,8 @@ class KeyExchange:
             _text(response.get("realm"), "response realm")
             _bytes(response.get("kem_ciphertext"), "KEM ciphertext", exact_len=1088)
             _bytes(response.get("nonce"), "response nonce", exact_len=32)
+            _bytes(response.get("transcript_hash"), "transcript hash", exact_len=32)
+            _bytes(response.get("transcript_mac"), "transcript MAC", exact_len=32)
             signature = _bytes(response.get("signature"), "response signature")
             tbs = _response_tbs(response, self._offer)
         except (TypeError, KeyError) as exc:
@@ -221,20 +263,40 @@ class KeyExchange:
             raise ValueError("Unexpected response realm")
         if not verify(peer_signing_pub, tbs, signature):
             raise ValueError("Invalid signature")
+        transcript_hash = _transcript_hash(self._offer, response)
+        if not hmac.compare_digest(transcript_hash, response["transcript_hash"]):
+            raise ValueError("Transcript hash mismatch")
+
         shared_secret = decapsulate(self.kem_key, response["kem_ciphertext"])
         if not isinstance(shared_secret, bytes) or not shared_secret:
             raise ValueError("Decapsulation failed")
-        salt = hashlib.sha256(b"QURION-KEX-SALT-v1" + self._offer["nonce"] + response["nonce"]).digest()
-        self._derive_keys(shared_secret, salt)
+        salt = hashlib.sha256(
+            b"QURION-KEX-SALT-v1" + self._offer["nonce"] + response["nonce"] + transcript_hash
+        ).digest()
+        self._derive_keys(shared_secret, salt, transcript_hash)
+        expected_mac = _transcript_mac(self.session_keys.mac_key, transcript_hash)
+        if not hmac.compare_digest(expected_mac, response["transcript_mac"]):
+            self.session_keys = None
+            raise ValueError("Invalid transcript MAC")
         self._response_processed = True
         return self.session_keys
 
-    def _derive_keys(self, shared_secret: bytes, salt: bytes) -> None:
-        enc_key = derive_key(shared_secret, b"qurion-session-encrypt-v1", salt, 32)
-        mac_key = derive_key(shared_secret, b"qurion-session-mac-v1", salt, 32)
+    def _derive_keys(self, shared_secret: bytes, salt: bytes, transcript_hash: bytes) -> None:
+        if not isinstance(transcript_hash, bytes) or len(transcript_hash) != 32:
+            raise ValueError("Invalid transcript hash")
+        enc_key = derive_key(
+            shared_secret, b"qurion-session-encrypt-v1" + transcript_hash, salt, 32
+        )
+        mac_key = derive_key(
+            shared_secret, b"qurion-session-mac-v1" + transcript_hash, salt, 32
+        )
         now = time.time()
-        key_id = hashlib.sha256(b"QURION-KEY-ID-v1" + enc_key + mac_key).hexdigest()[:16]
-        self.session_keys = SessionKeys(enc_key, mac_key, key_id, now, now + self.ttl)
+        key_id = hashlib.sha256(
+            b"QURION-KEY-ID-v1" + transcript_hash + enc_key + mac_key
+        ).hexdigest()[:16]
+        self.session_keys = SessionKeys(
+            enc_key, mac_key, key_id, now, now + self.ttl, transcript_hash
+        )
 
     def get_session_keys(self) -> SessionKeys | None:
         return self.session_keys
