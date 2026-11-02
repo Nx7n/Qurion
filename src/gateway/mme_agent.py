@@ -1,3 +1,6 @@
+import logging
+import time
+
 from src.diameter.avp_codec import (
     DiameterMessage,
     DiameterAVP,
@@ -8,6 +11,7 @@ from src.diameter.avp_codec import (
 )
 from src.protocol.protected_avp import ProtectedAVP
 
+logger = logging.getLogger(__name__)
 
 class MMEAgent:
     """MME-side Qurion agent.
@@ -57,9 +61,12 @@ class MMEAgent:
     ) -> DiameterMessage:
         return message
 
+    
     def process_incoming_aia(
         self, message: DiameterMessage
     ) -> DiameterMessage:
+        total_start = time.perf_counter()
+
         if message.command_code != 318 or message.application_id != 16777251:
             raise ValueError("Expected an S6a AIA message")
 
@@ -75,28 +82,24 @@ class MMEAgent:
         ]
 
         if len(protected_avps) != 1:
-            raise ValueError(
-                "Expected exactly one Qurion protected AVP"
-            )
+            raise ValueError("Expected exactly one Qurion protected AVP")
 
-        # Reject plaintext authentication vectors, including grouped
-        # containers that could carry unprotected nested vectors.
+        # Reject plaintext authentication vectors, including grouped containers
+        # that could carry unprotected nested vectors.
         plaintext_vector_codes = {
             AVP_AUTH_INFO,
             AVP_E_UTRAN_VECTOR,
-            1447,
-            1415,
-            1449,
-            1450,
+            1447,  # RAND
+            1415,  # XRES
+            1449,  # AUTN
+            1450,  # KASME
         }
 
         if any(
             avp.code in plaintext_vector_codes
             for avp in message.avps
         ):
-            raise ValueError(
-                "Unexpected plaintext authentication-vector AVP"
-            )
+            raise ValueError("Unexpected plaintext authentication-vector AVP")
 
         if self.peer_operator_id is None or self.peer_realm is None:
             raise ValueError("Trusted HSS identity is required")
@@ -108,14 +111,23 @@ class MMEAgent:
                 self.peer_operator_id, self.peer_realm, "SIGNING"
             )
             if peer_cert is None:
-                raise ValueError("HSS has no trusted, valid signing certificate")
-            if self.peer_signing_pub is not None and self.peer_signing_pub != peer_cert.signing_pub:
-                raise ValueError("HSS signing key does not match trusted certificate")
+                raise ValueError(
+                    "HSS has no trusted, valid signing certificate"
+                )
+            if (
+                self.peer_signing_pub is not None
+                and self.peer_signing_pub != peer_cert.signing_pub
+            ):
+                raise ValueError(
+                    "HSS signing key does not match trusted certificate"
+                )
             self.peer_signing_pub = peer_cert.signing_pub
+
         if self.peer_signing_pub is None:
             raise ValueError("Trusted HSS signing key is required")
 
-        envelope = ProtectedAVP.deserialize(protected_avps[0].data)
+        envelope_data = protected_avps[0].data
+        envelope = ProtectedAVP.deserialize(envelope_data)
 
         expected_sender = self._identity(
             self.peer_operator_id, self.peer_realm
@@ -128,15 +140,20 @@ class MMEAgent:
         if envelope.recipient_id != expected_recipient:
             raise ValueError("Protected AVP recipient identity mismatch")
 
-        # Verifies the envelope signature, decapsulates the KEM secret,
-        # and authenticates/decrypts the AEAD payload.
+        # Verify signature, decapsulate the KEM secret, and decrypt the AEAD
+        # payload. If any check fails, the exception propagates and the proxy
+        # drops the message.
+        crypto_start = time.perf_counter()
         plaintext = envelope.open(
             recipient_kem_secret_key=self.kem_key,
             sender_signing_pub=self.peer_signing_pub,
         )
+        crypto_open_ms = (time.perf_counter() - crypto_start) * 1000
 
-        # Decode the inner AVPs only after successful cryptographic checks.
+        # Decode inner AVPs only after successful cryptographic verification.
+        decode_start = time.perf_counter()
         decoded_avps = DiameterAVP.decode_all(plaintext)
+        avp_decode_ms = (time.perf_counter() - decode_start) * 1000
 
         if not decoded_avps:
             raise ValueError("Protected payload contains no AVPs")
@@ -151,7 +168,23 @@ class MMEAgent:
         ]
         message.avps.extend(decoded_avps)
 
+        total_ms = (time.perf_counter() - total_start) * 1000
+
+        logger.info(
+            "QURION_METRIC operation=mme_aia_protection "
+            "crypto_open_ms=%.3f avp_decode_ms=%.3f total_ms=%.3f "
+            "envelope_bytes=%d plaintext_bytes=%d decoded_avp_count=%d "
+            "outcome=success",
+            crypto_open_ms,
+            avp_decode_ms,
+            total_ms,
+            len(envelope_data),
+            len(plaintext),
+            len(decoded_avps),
+        )
+
         return message
+
 
     def handle_capability_exchange(self, peer_capability_data: bytes):
         # Capability negotiation will be implemented in a later step.

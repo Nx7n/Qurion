@@ -1,3 +1,6 @@
+import logging
+import time
+
 from src.diameter.avp_codec import (
     DiameterMessage,
     AVPBuilder,
@@ -6,6 +9,8 @@ from src.diameter.avp_codec import (
 )
 from src.protocol.protected_avp import ProtectedAVP
 
+
+logger = logging.getLogger(__name__)
 
 class HSSAgent:
     """HSS-side Qurion agent.
@@ -62,11 +67,14 @@ class HSSAgent:
         # AIR requests do not contain the authentication vectors to protect.
         return message
 
+    
     def process_outgoing_aia(
         self,
         message: DiameterMessage,
         peer_kem_pub: bytes,
     ) -> DiameterMessage:
+        total_start = time.perf_counter()
+
         if message.command_code != 318 or message.application_id != 16777251:
             raise ValueError("Expected an S6a AIA message")
 
@@ -76,18 +84,21 @@ class HSSAgent:
         if self.peer_operator_id is None or self.peer_realm is None:
             raise ValueError("Recipient identity is not configured")
 
-        # In a configured deployment, resolve the recipient KEM key from the
-        # trusted certificate store. The explicit argument remains supported
-        # for legacy tests/development, but must agree with the trusted cert.
+        # Resolve the recipient KEM key from the trusted certificate store.
         if self.trust_store is not None:
             peer_cert = self.trust_store.verify_peer(
                 self.peer_operator_id, self.peer_realm, "KEM"
             )
             if peer_cert is None:
-                raise ValueError("Recipient has no trusted, valid KEM certificate")
+                raise ValueError(
+                    "Recipient has no trusted, valid KEM certificate"
+                )
             if peer_kem_pub is not None and peer_kem_pub != peer_cert.kem_pub:
-                raise ValueError("Recipient KEM key does not match trusted certificate")
+                raise ValueError(
+                    "Recipient KEM key does not match trusted certificate"
+                )
             peer_kem_pub = peer_cert.kem_pub
+
         if not isinstance(peer_kem_pub, bytes) or not peer_kem_pub:
             raise ValueError("Recipient KEM public key is required")
 
@@ -97,11 +108,16 @@ class HSSAgent:
         ]
 
         if not auth_avps:
-            raise ValueError("AIA contains no recognized authentication-vector AVPs")
+            raise ValueError(
+                "AIA contains no recognized authentication-vector AVPs"
+            )
 
         # Preserve the original AVP wire encoding inside the protected payload.
         plaintext = b"".join(avp.encode() for avp in auth_avps)
+        plaintext_size = len(plaintext)
 
+        # Time the cryptographic protection operation.
+        create_start = time.perf_counter()
         protected = ProtectedAVP.create(
             sender_id=self._identity(self.operator_id, self.realm),
             recipient_id=self._identity(
@@ -111,8 +127,13 @@ class HSSAgent:
             recipient_kem_pub=peer_kem_pub,
             sender_signing_key=self.signing_key,
         )
+        create_ms = (time.perf_counter() - create_start) * 1000
 
+        # Time serialization separately.
+        serialize_start = time.perf_counter()
         protected_data = protected.serialize()
+        serialize_ms = (time.perf_counter() - serialize_start) * 1000
+
         protected_avp = AVPBuilder.build_protected_av_avp(protected_data)
 
         # Replace only the AVPs selected for protection.
@@ -122,7 +143,23 @@ class HSSAgent:
         ]
         message.avps.append(protected_avp)
 
+        total_ms = (time.perf_counter() - total_start) * 1000
+
+        logger.info(
+            "QURION_METRIC operation=hss_aia_protection "
+            "crypto_create_ms=%.3f serialization_ms=%.3f "
+            "total_ms=%.3f plaintext_bytes=%d envelope_bytes=%d "
+            "vector_avp_count=%d outcome=success",
+            create_ms,
+            serialize_ms,
+            total_ms,
+            plaintext_size,
+            len(protected_data),
+            len(auth_avps),
+        )
+
         return message
+
 
     def handle_capability_exchange(self, peer_capability_data: bytes):
         # Capability negotiation will be implemented in a later step.
